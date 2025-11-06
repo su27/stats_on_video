@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频数据叠加工具</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>视频数据叠加工具</h1>
+        
+        <form id="processForm">
+            <div class="form-group">
+                <label for="videoPath">视频文件路径:</label>
+                <input type="text" id="videoPath" placeholder="/home/user/video.mp4" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="fitPath">FIT文件路径:</label>
+                <input type="text" id="fitPath" placeholder="/home/user/data.fit" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="offset">运动起始时间 (MM:SS):</label>
+                <input type="text" id="offset" placeholder="00:00" value="00:00" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="outputPath">输出目录:</label>
+                <input type="text" id="outputPath" placeholder="./output" value="./output" required>
+            </div>
+            
+            <button type="submit" id="submitBtn">开始处理</button>
+        </form>
+        
+        <div id="progressContainer" class="hidden">
+            <h2>处理进度</h2>
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+            <p id="progressText">等待中...</p>
+            <p id="statusText" class="status"></p>
+        </div>
+        
+        <div id="resultContainer" class="hidden">
+            <h2>处理完成</h2>
+            <p>输出文件: <span id="outputFile"></span></p>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>

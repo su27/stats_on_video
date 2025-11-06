@@ -1,0 +1,24 @@
+[project]
+name = "make-video"
+version = "0.1.0"
+description = "Add sports data overlay to videos from FIT files"
+requires-python = ">=3.10"
+dependencies = [
+    "fitparse>=1.2.0",
+    "pillow>=12.0.0",
+    "flask>=3.0.0",
+]
+
+[project.scripts]
+make-video-server = "app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+only-include = ["app.py", "video_processor.py", "static"]
+
+[tool.uv]
+package = true
