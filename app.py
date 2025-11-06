@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Flask Web服务
+提供Web界面用于视频数据叠加处理
+"""
 from flask import Flask, request, jsonify, send_from_directory
 from video_processor import VideoProcessor
 import threading
@@ -7,16 +11,30 @@ import os
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 
-# 任务状态存储
+# 任务状态存储（内存中）
 tasks = {}
+
 
 @app.route('/')
 def index():
+    """返回主页"""
     return send_from_directory('static', 'index.html')
+
 
 @app.route('/api/process', methods=['POST'])
 def process_video():
-    """创建视频处理任务"""
+    """
+    创建视频处理任务
+    
+    请求参数：
+    - video_path: 视频文件路径
+    - fit_path: FIT文件路径
+    - offset: 视频起始偏移时间 (MM:SS格式)
+    - output_path: 输出目录
+    
+    返回：
+    - task_id: 任务ID，用于查询状态
+    """
     data = request.json
     video_path = data.get('video_path')
     fit_path = data.get('fit_path')
@@ -83,14 +101,25 @@ def process_video():
 
 @app.route('/api/status/<task_id>', methods=['GET'])
 def get_status(task_id):
-    """查询任务状态"""
+    """
+    查询任务状态
+    
+    返回：
+    - status: pending/processing/completed/error
+    - progress: 进度百分比 (0-100)
+    - message: 状态消息
+    - output_file: 输出文件路径（完成时）
+    """
     if task_id not in tasks:
         return jsonify({'error': '任务不存在'}), 404
     
     return jsonify(tasks[task_id])
 
+
 def main():
     """命令行入口"""
+    print("启动视频数据叠加服务...")
+    print("访问 http://localhost:5000 使用Web界面")
     app.run(host='0.0.0.0', port=5000, debug=True)
 
 if __name__ == '__main__':
