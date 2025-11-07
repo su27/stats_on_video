@@ -71,16 +71,21 @@ async function pollStatus(taskId) {
             progressText.textContent = `${data.progress}%`;
             statusText.textContent = data.message;
             
+            // 更新页面标题
+            document.title = `(${data.progress}%) Stats on Video`;
+            
             // 检查状态
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
                 submitBtn.disabled = false;
                 resultContainer.classList.remove('hidden');
                 outputFile.textContent = data.output_file;
+                document.title = 'Stats on Video';
             } else if (data.status === 'error') {
                 clearInterval(pollInterval);
                 submitBtn.disabled = false;
                 alert('处理失败: ' + data.message);
+                document.title = 'Stats on Video';
             }
             
         } catch (error) {
