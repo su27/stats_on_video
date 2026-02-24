@@ -3,12 +3,13 @@
 视频处理模块
 负责从FIT文件提取运动数据并叠加到视频上
 """
-from fitparse import FitFile
+from garmin_fit_sdk import Decoder, Stream
 from PIL import Image, ImageDraw, ImageFont
 import subprocess
 import os
 import json
 import time
+import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
@@ -35,9 +36,16 @@ class VideoProcessor:
         
     def _detect_gpu_encoder(self):
         """检测可用的GPU编码器"""
-        # 检测NVIDIA
-        result = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'], 
-                              capture_output=True, text=True)
+        try:
+            result = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'], 
+                                  capture_output=True, text=True)
+        except FileNotFoundError:
+            raise RuntimeError(
+                "未找到 ffmpeg，请先安装:\n"
+                "  Ubuntu/Debian: sudo apt install ffmpeg\n"
+                "  macOS: brew install ffmpeg\n"
+                "  Windows: https://ffmpeg.org/download.html"
+            )
         encoders = result.stdout
         
         if 'h264_nvenc' in encoders:
@@ -56,8 +64,17 @@ class VideoProcessor:
         try:
             # 解析FIT数据
             self._update_progress(0, "解析FIT文件...")
-            fit = FitFile(self.fit_path)
-            self.records = list(fit.get_messages('record'))
+            stream = Stream.from_file(self.fit_path)
+            decoder = Decoder(stream)
+            messages, errors = decoder.read()
+            
+            # 提取 record 消息
+            self.records = []
+            if 'record_mesgs' in messages:
+                self.records = messages['record_mesgs']
+            
+            if not self.records:
+                raise Exception("FIT文件中没有找到运动记录数据")
             
             # 提取GPS坐标并预处理
             self._extract_gps_data()
@@ -69,8 +86,7 @@ class VideoProcessor:
             
             # 生成叠加图层
             self._update_progress(10, f"生成叠加图层 (共{total_frames}帧)...")
-            overlay_dir = 'overlay_frames'
-            os.makedirs(overlay_dir, exist_ok=True)
+            overlay_dir = tempfile.mkdtemp(prefix='overlay_frames_')
             
             start_time = time.time()
             completed_frames = 0
@@ -139,7 +155,7 @@ class VideoProcessor:
             
             ffmpeg_cmd.extend(['-c:a', 'copy', output_file])
             
-            subprocess.run(ffmpeg_cmd, capture_output=True)
+            subprocess.run(ffmpeg_cmd, capture_output=True, text=True, check=True)
             
             # 清理临时文件
             self._update_progress(95, "清理临时文件...")
@@ -163,7 +179,8 @@ class VideoProcessor:
         video_stream = info['streams'][0]
         width = video_stream['width']
         height = video_stream['height']
-        fps = eval(video_stream['r_frame_rate'])
+        fps_parts = video_stream['r_frame_rate'].split('/')
+        fps = int(fps_parts[0]) / int(fps_parts[1]) if len(fps_parts) == 2 else float(fps_parts[0])
         
         result = subprocess.run(
             ['ffprobe', '-v', 'quiet', '-print_format', 'json',
@@ -179,11 +196,11 @@ class VideoProcessor:
         idx = min(int(offset_seconds), len(self.records) - 1)
         record = self.records[idx]
         
-        hr = record.get_value('heart_rate') or 0
-        speed = record.get_value('enhanced_speed') or record.get_value('speed') or 0
-        cadence = record.get_value('cadence') or 0
-        distance = (record.get_value('distance') or 0) / 1000
-        power = record.get_value('power') or 0
+        hr = record.get('heart_rate', 0) or 0
+        speed = record.get('enhanced_speed') or record.get('speed', 0) or 0
+        cadence = record.get('cadence', 0) or 0
+        distance = (record.get('distance', 0) or 0) / 1000
+        power = record.get('power', 0) or 0
         
         if speed > 0:
             pace_seconds = 1000 / speed
@@ -206,10 +223,10 @@ class VideoProcessor:
         """提取并预处理GPS数据"""
         self.gps_coords = []
         for record in self.records:
-            lat = record.get_value('position_lat')
-            lon = record.get_value('position_long')
-            if lat and lon:
-                # 转换semicircles到度
+            lat = record.get('position_lat')
+            lon = record.get('position_long')
+            if lat is not None and lon is not None:
+                # garmin-fit-sdk 返回的是 semicircles，需要转换为度数
                 lat_deg = lat * (180 / 2**31)
                 lon_deg = lon * (180 / 2**31)
                 self.gps_coords.append((lat_deg, lon_deg))
@@ -257,12 +274,12 @@ class VideoProcessor:
             return
         
         # 使用绝对距离：前后100米
-        # 1度纬度约等于111km，1度经度在北纬40度约等于85km
-        # 100米 ≈ 0.0009度纬度，≈ 0.0012度经度（粗略估算）
-        zoom_distance_meters = 100  # 显示前后100米
-        zoom_range_lat = zoom_distance_meters / 111000  # 纬度范围
-        zoom_range_lon = zoom_distance_meters / 85000   # 经度范围（北纬40度附近）
-        zoom_range = max(zoom_range_lat, zoom_range_lon)  # 取较大值保证显示完整
+        zoom_distance_meters = 100
+        zoom_range_lat = zoom_distance_meters / 111000
+        zoom_range_lon = zoom_distance_meters / 85000
+        zoom_range = max(zoom_range_lat, zoom_range_lon)
+        
+        center_lat, center_lon = current_coord
         
         # 绘制圆形背景（半透明黑色）
         draw.ellipse(
@@ -274,10 +291,11 @@ class VideoProcessor:
         line_width = max(2, int(map_size * 0.01))
         dot_size = max(6, int(map_size * 0.03))
         
-        # 找出当前范围内的路线点
-        center_lat, center_lon = current_coord
+        center_x = map_x + map_size // 2
+        center_y = map_y + map_size // 2
+        radius = map_size // 2
         
-        # 绘制路线（只绘制范围内的点）
+        # 绘制路线（严格圆形裁剪）
         prev_pixel = None
         prev_in_circle = False
         for i, coord in enumerate(self.gps_coords):
@@ -289,12 +307,11 @@ class VideoProcessor:
                     pixel = self._gps_to_pixel(lat, lon, map_size, center_lat, center_lon, zoom_range)
                     pixel = (map_x + pixel[0], map_y + pixel[1])
                     
-                    # 检查当前点是否在圆形区域内
-                    curr_in_circle = self._is_in_circle(pixel[0], pixel[1], map_x + map_size//2, map_y + map_size//2, map_size//2)
+                    # 检查当前点是否在圆内
+                    curr_in_circle = self._is_in_circle(pixel[0], pixel[1], center_x, center_y, radius)
                     
                     # 只有当前点和前一个点都在圆内时才画线
                     if curr_in_circle and prev_pixel and prev_in_circle:
-                        # 已走过的用灰白色，未走过的用白色
                         color = (200, 200, 200, 255) if i <= current_idx else (255, 255, 255, 255)
                         draw.line([prev_pixel, pixel], fill=color, width=line_width)
                     
@@ -309,8 +326,6 @@ class VideoProcessor:
                     prev_in_circle = False
         
         # 绘制当前位置（中心的白色圆点）
-        center_x = map_x + map_size // 2
-        center_y = map_y + map_size // 2
         draw.ellipse(
             [center_x - dot_size, center_y - dot_size, 
              center_x + dot_size, center_y + dot_size],
@@ -379,6 +394,29 @@ class VideoProcessor:
                 fill=(255, 255, 255, 255)
             )
     
+    @staticmethod
+    def _find_font(bold=False):
+        """跨平台查找系统字体"""
+        import sys
+        candidates = []
+        if sys.platform == 'win32':
+            base = os.environ.get('WINDIR', r'C:\Windows')
+            candidates = [os.path.join(base, 'Fonts', f) for f in
+                          (['arialbd.ttf', 'arial.ttf'] if bold else ['arial.ttf'])]
+        elif sys.platform == 'darwin':
+            candidates = ['/System/Library/Fonts/Helvetica.ttc',
+                          '/Library/Fonts/Arial.ttf']
+        # Linux + fallback for all platforms
+        if bold:
+            candidates += ['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                           '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf']
+        candidates += ['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                       '/usr/share/fonts/TTF/DejaVuSans.ttf']
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        raise OSError("No suitable font found")
+
     def _create_overlay(self, width, height, data):
         """创建叠加图层"""
         img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
@@ -386,30 +424,24 @@ class VideoProcessor:
         
         # 根据视频尺寸计算比例
         base_size = min(width, height)
-        font_size = int(base_size * 0.05)  # 字体大小为短边的5%
-        font_size_small = int(base_size * 0.035)  # 小字体为短边的3.5%
+        font_size = int(base_size * 0.05)
+        font_size_small = int(base_size * 0.035)
         
         try:
-            font_bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', font_size)
-            font_regular = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', font_size_small)
-        except:
-            try:
-                font_bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', font_size)
-                font_regular = font_bold
-            except:
-                font_bold = ImageFont.load_default()
-                font_regular = font_bold
+            font_bold = ImageFont.truetype(self._find_font(bold=True), font_size)
+            font_regular = ImageFont.truetype(self._find_font(bold=False), font_size_small)
+        except OSError:
+            font_bold = ImageFont.load_default()
+            font_regular = font_bold
         
-        # 数据面板（左上角）- 无背景
-        margin = int(base_size * 0.03)  # 边距为短边的3%
-        padding = int(base_size * 0.025)  # 内边距
+        # 数据面板（左上角）
+        margin = int(base_size * 0.03)
+        padding = int(base_size * 0.025)
         
         panel_x, panel_y = margin, margin
-        
         y = panel_y + padding
         line_height = int(font_size * 1.3)
         
-        # 绘制数据（数值用粗体，单位用细体小字）
         data_items = [
             (f"♥ {data['hr']}", "bpm"),
             (f"⚡ {data['pace']}", "/km"),
@@ -420,24 +452,21 @@ class VideoProcessor:
         
         for value_text, unit_text in data_items:
             x = panel_x + padding
-            # 绘制数值（粗体）
             draw.text((x, y), value_text, fill=(255, 255, 255, 255), font=font_bold)
-            # 计算数值文本宽度
             value_bbox = draw.textbbox((x, y), value_text, font=font_bold)
             value_width = value_bbox[2] - value_bbox[0]
-            # 绘制单位（细体小字，稍微偏下对齐）
-            unit_y = y + int(font_size * 0.15)  # 稍微下移对齐基线
+            unit_y = y + int(font_size * 0.15)
             draw.text((x + value_width + 5, unit_y), unit_text, fill=(255, 255, 255, 200), font=font_regular)
             y += line_height
         
-        # 路线图（右上角）- 大小为短边的一半
+        # 路线图（右上角）
         if self.gps_coords:
             map_size = int(base_size * 0.5)
             map_x = width - map_size - margin
             map_y = margin
             self._draw_route_map(draw, data['current_idx'], map_x, map_y, map_size)
             
-            # 小地图（右下角）- 大小为短边的30%
+            # 小地图（右下角）
             mini_map_size = int(base_size * 0.3)
             mini_map_x = width - mini_map_size - margin
             mini_map_y = height - mini_map_size - margin

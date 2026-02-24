@@ -17,13 +17,10 @@ uv.lock
 output/
 *.mp4
 *.fit
-*.jpg
-*.png
-overlay_frames/
 
 # 临时文件
-temp_frame.jpg
-preview.jpg
+*.jpg
+*.png
 
 # IDE
 .vscode/
