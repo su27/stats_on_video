@@ -95,13 +95,18 @@ uv run python app.py
 ```
 ├── app.py                 # Flask Web 服务，提供 API 和任务管理
 ├── video_processor.py     # 核心视频处理逻辑
-├── static/
-│   ├── index.html         # Web 界面
-│   ├── app.js             # 前端交互逻辑
-│   └── style.css          # 样式
 ├── pyproject.toml         # 项目配置和依赖
 ├── LICENSE                # MIT 许可证
 └── README.md              # 本文档
+```
+
+### static/
+
+```
+static/
+├── index.html         # Web 界面
+├── app.js             # 前端交互逻辑
+└── style.css          # 样式
 ```
 
 ## 技术细节
@@ -127,12 +132,82 @@ uv run python app.py
 - 临时文件使用系统临时目录，不污染工作目录
 - ffmpeg 未安装时提供对应平台的安装指引
 
-## 注意事项
+## 故障排除
 
-- 确保视频和 FIT 文件路径正确且可读
-- 视频处理时间取决于视频长度、分辨率和系统性能
-- 建议使用 SSD 存储以提升临时文件读写速度
-- GPU 加速需要安装对应的驱动程序
+### 常见问题
+
+**1. FIT 文件解析失败**
+- 确认 FIT 文件是有效的 Garmin 导出文件
+- 确保文件编码为 UTF-8
+
+**2. 视频处理卡顿**
+- 检查 ffmpeg 是否正确安装：`ffmpeg -version`
+- 尝试使用 SSD 存储临时文件
+- 降低视频分辨率或帧率
+
+**3. GPU 加速不可用**
+- NVIDIA: 确认安装了 CUDA 驱动 `nvidia-smi`
+- Intel: 确认安装了 Media SDK
+- AMD: 确认安装了显卡驱动
+
+**4. 字体显示异常**
+- Linux: 确保已安装 DejaVu 字体 `sudo apt install fonts-dejavu`
+
+### 命令行使用
+
+```bash
+# 启动 Web 服务
+make-video-server
+
+# 或使用 uv
+uv run make-video-server
+```
+
+### REST API
+
+#### 创建处理任务
+
+```
+POST /api/process
+Content-Type: application/json
+```
+
+请求参数：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| video_path | string | 是 | 视频文件完整路径 |
+| fit_path | string | 是 | FIT 文件完整路径 |
+| offset | string | 否 | 视频起始偏移时间，格式 MM:SS，默认 00:00 |
+| output_path | string | 否 | 输出目录，默认 ./output |
+
+响应：
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### 查询任务状态
+
+```
+GET /api/status/<task_id>
+```
+
+响应：
+```json
+{
+  "status": "processing",
+  "progress": 45,
+  "message": "生成叠加图层: 450/1000 (剩余 120s, 8线程)",
+  "output_file": null
+}
+```
+
+状态说明：
+- `pending`: 等待处理
+- `processing`: 处理中
+- `completed`: 完成
+- `error`: 出错
 
 ## License
 
